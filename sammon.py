@@ -65,7 +65,7 @@ def cl_gradient(D,d,y):
     #
     # }
     # """
-    matrice = eltWise(ctx,'float2 D, float2 d ,const float N,const float M, const float g,float res ',
+    matrice = eltWise(ctx,'float* D, float* d ,const float N,const float M, const float g,float* res ',
                       '''
                         
                       for(int q=0;q<M;q++){
@@ -73,7 +73,7 @@ def cl_gradient(D,d,y):
                         for(int p=0;p<N;p++){
                             float temp =0;
                             for(int j=0;j<N;j++){
-                                temp += (D[p][j]-d[p][j] / D[p][j] * d[p][j]);
+                                temp += (*D[p][j]-*d[p][j] / *D[p][j] * *d[p][j]);
                             }
                             res[p][q]=-temp ; 
                         }
