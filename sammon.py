@@ -18,6 +18,8 @@ queue = cl.CommandQueue(ctx)
 mf = cl.mem_flags
 a_np = np.random.randn(N).astype(np.float32)
 a_g = cl.array.to_device(queue, a_np)
+
+
 # @profile
 def error(D, d):
     N, _ = D.shape
@@ -44,46 +46,28 @@ def gradient(D, d, y):
             g[p, q] = -s
     return g
 
-def cl_gradient(D,d,y):
-    N,M=y.shape
-    g = np.zeros([N,M])
-    res = np.empty([2201],dtype=float)
-    # kernel_code ="""
-    # __kernel float32 matrice(float32 D, float32 d,float32 N,float32 M,float32 g){
-    #
-    #  for(int q=0;q<M;q++){
-    #
-    #     for(int p=0;p<N;p++{
-    #         float32 temp =0;
-    #             for(int j=0;j<N;j++){
-    #                 temp += (D[p][j]-d[p][j] / D[p][j] * d[p][j]);
-    #             }
-    #         res[p][q]=-s ;
-    #      }
-    # }
-    # return res ;
-    #
-    # }
-    # """
-    matrice = eltWise(ctx,'float* D, float* d ,const float N,const float M, const float g,float* res ',
-                      '''
-                        
-                      for(int q=0;q<M;q++){
-                        
-                        for(int p=0;p<N;p++){
-                            float temp =0;
-                            for(int j=0;j<N;j++){
-                                temp += (*D[p][j]-*d[p][j] / *D[p][j] * *d[p][j]);
-                            }
-                            res[p][q]=-temp ; 
-                        }
-                      }
-                      ''','matrice')
-    #program = cl.Program(ctx,matrice).build
-    #program.matrice(queue,None,D,d,N,M,g)
-    matrice(D,d,N,M,g,res)
 
-    
+def cl_gradient(D, d, y):
+    N, M = y.shape
+
+    g = np.zeros([N, M])
+    matrice = eltWise(ctx, 'float *D,float *d, float2 *g, int n',
+                      '''
+                    unsigned int p = get_local_id(0);
+
+                     float2 sum=0;
+                     for(unsigned int j=0;j<n;j++){
+                         if(p!=j)
+                        {
+                            sum += (D[p*n+j]-d[p*n+j])/(D[p*n+j] * d[p*n+j]); 
+                        }
+                     }
+                         g[p]=-sum;
+                         
+                  ''', 'matrice')
+    matrice(D, d, g, N)
+
+
 def hessian(D, d, y):
     """Calcul de la dérivée seconde """
     N, M = y.shape
@@ -114,20 +98,21 @@ def y_update_constant(y, s, D, d, alpha=0.3):
     E_new = cl_error(D, d)
     return y, E_new
 
-#@profile
+
+# @profile
 def cl_error(D, d):
-    cl_D= cl.array.to_device(queue, D)
-    cl_d= cl.array.to_device(queue, d)
+    cl_D = cl.array.to_device(queue, D)
+    cl_d = cl.array.to_device(queue, d)
     krnl = ReductionKernel(ctx, np.float32, neutral="0",
-                       reduce_expr="a+b", map_expr="x[i] != 0 ? ((x[i] - y[i])*(x[i] - y[i]))/x[i]: 0.0",
-                       arguments="__global float *x, __global float *y")
-    res_error = krnl(cl_D,cl_d).get()
+                           reduce_expr="a+b", map_expr="x[i] != 0 ? ((x[i] - y[i])*(x[i] - y[i]))/x[i]: 0.0",
+                           arguments="__global float *x, __global float *y")
+    res_error = krnl(cl_D, cl_d).get()
     return res_error
 
 
 def y_update_halving(y, s, D, d, maxhalves=20):
-    #E = error(D, d)
-    E=cl_error(D,d)
+    # E = error(D, d)
+    E = cl_error(D, d)
     y_init = y
     for j in range(maxhalves):
         y = y_init + s
@@ -147,7 +132,7 @@ def acp(x, n):
     return UU[:, :n] * DD[:n]
 
 
-#@profile
+# @profile
 def main():
     maxhalves = 20  # nombre 1/2 pas maximum (step halving)
     alpha = 0.3  # constante pour la descente \alpha(t)=cste
@@ -187,14 +172,15 @@ def main():
     # Un maximum de maxiter itérations pour converger
     for i in range(maxiter):
         # Calcul du gradient
-        g = gradient(D, d, y)
-        cl_g= cl_gradient(D,d,y)
+
+       # g = gradient(D, d, y)
+        cl_g = cl_gradient(D, d, y)
 
         # et de la Hessienne
         H = hessian(D, d, y)
 
         # calcul du pas
-        s = -g.flatten(order="F") / np.abs(H.flatten(order="F"))
+        s = -cl_g.flatten(order="F") / np.abs(H.flatten(order="F"))
         s = np.reshape(s, (-1, n), order='F')
         # mise à jour des distance dans l'espace de représentation
         d = cdist(y, y).astype(np.float32)
