@@ -19,6 +19,27 @@ mf = cl.mem_flags
 a_np = np.random.randn(N).astype(np.float32)
 a_g = cl.array.to_device(queue, a_np)
 
+kernel_gradient = """__kernel void gradient(__global float  *D, __global float *d, __global float2* g, __global float2* y , int n)
+    {
+        unsigned int p = get_local_id(0); //get_global_id(0)?
+        float2 sum=0;
+        printf(" D == %f \\n", D[0]);
+        printf(" d == %f \\n", d[0]);
+        
+        for(unsigned int j=0;j<n;j++)
+        {
+            if(p!=j)
+            {   
+
+               sum += (D[p*n+j] - d[p*n+j]) / (D[p*n+j] * d[p*n+j]) * (y[p] - y[j]);
+               //printf(" %f P %d  \\n", (float2) -sum, (int) p);
+            }
+        }
+        g[p]=-sum;
+       
+           
+    }"""
+
 
 # @profile
 def error(D, d):
@@ -49,23 +70,44 @@ def gradient(D, d, y):
 
 def cl_gradient(D, d, y):
     N, M = y.shape
+    g = np.zeros([N, M], dtype=np.float32).flatten()
+    print("D =",D.astype(np.float32))
+    print("d =",d.astype(np.float32))
+    cl_g = cl.Buffer(ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=g)
+    cl_D = cl.Buffer(ctx, mf.COPY_HOST_PTR, hostbuf=D)
+    cl_d = cl.Buffer(ctx, mf.COPY_HOST_PTR, hostbuf=d)
+    cl_y = cl.Buffer(ctx, mf.COPY_HOST_PTR, hostbuf=y)
 
-    g = np.zeros([N, M])
-    matrice = eltWise(ctx, 'float *D,float *d, float2 *g, int n',
-                      '''
-                    unsigned int p = get_local_id(0);
 
-                     float2 sum=0;
-                     for(unsigned int j=0;j<n;j++){
-                         if(p!=j)
-                        {
-                            sum += (D[p*n+j]-d[p*n+j])/(D[p*n+j] * d[p*n+j]); 
-                        }
-                     }
-                         g[p]=-sum;
-                         
-                  ''', 'matrice')
-    matrice(D, d, g, N)
+    #print("D = ",D)
+    #print("d = ",d)
+
+    prg = cl.Program(ctx, kernel_gradient).build()
+
+    prg.gradient(queue, (N, 1), None,cl_D, cl_d, cl_g, cl_y, np.int32(N))  # incorrect. flatten the arrays.
+
+
+
+    #Cette solution ne fonctionne pas le compilateur me dit que je redefinis n alors que c'est pas vrai j'en ai marre
+
+    # matrice = eltWise(ctx, '__global float *D,__global float *d,int *n,__global float2 *g',
+    #                   '''
+    #                 unsigned int p = get_local_id(0);
+    #
+    #                  float2 sum=0;
+    #                  for(unsigned int j=0;j<n;j++){
+    #                  unsigned int temp = n ;
+    #                      if(p!=j)
+    #                     {
+    #                         sum += (D[p*temp+j]-d[p*temp+j])/(D[p*temp+j] * d[p*temp+j]);
+    #                     }
+    #                  }
+    #                      g[p]=-sum;
+    #
+    #               ''', name ='matrice',preamble="", options=[])
+    #
+    # matrice(cl_D, cl_d,np.int32((N,1)),cl_g)
+    return g.flatten()
 
 
 def hessian(D, d, y):
@@ -173,7 +215,7 @@ def main():
     for i in range(maxiter):
         # Calcul du gradient
 
-       # g = gradient(D, d, y)
+        g = gradient(D, d, y)
         cl_g = cl_gradient(D, d, y)
 
         # et de la Hessienne
