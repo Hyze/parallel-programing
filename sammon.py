@@ -25,8 +25,7 @@ kernel_g = cl.Program(ctx,"""__kernel void gradient(__global float  *D, __global
     {
         unsigned int p = get_local_id(0); //get_global_id(0)?
         float2 sum=0;
-       // printf(" D == %f \\n", D[0]);
-        //printf(" d == %f \\n", d[0]);
+    
         
         for(unsigned int j=0;j<n;j++)
         {
@@ -41,6 +40,26 @@ kernel_g = cl.Program(ctx,"""__kernel void gradient(__global float  *D, __global
        
            
     }""").build()
+
+kernel_h=cl.Program(ctx,"""
+    __kernel void hessian(__global float * D,__global float * d,__global float2 * h,__global float2 * y,const int n)
+    {
+        uint p=get_local_id(0);
+        float2 sum=0;
+        for(int j=0;j<n;j++){
+            if(p!=j){
+                sum+=(1/(D[p*n+j]*d[p*n+j])*((D[p*n+j]-d[p*n+j])-((y[p]-y[j])*(y[p]-y[j]))/d[p*n+j]*(1+(D[p*n+j]-d[p*n+j])/d[p*n+j])));
+            }
+        }
+        h[p]=-sum;
+    }
+
+    """
+    ).build()
+
+
+
+
 
 
 # @profile
@@ -81,7 +100,7 @@ def cl_gradient(D, d, y):
 
     kernel_g.gradient(queue, (N, 1), None, cl_D, cl_d, cl_g, cl_y, np.int32(N))
     cl.enqueue_copy(queue, g, cl_g)
-    return g.flatten().astype(np.float32)
+    return g.flatten().astype(np.float64)
 
 
     #Cette solution ne fonctionne pas le compilateur me dit que je redefinis n je comprend pas
@@ -128,7 +147,18 @@ def hessian(D, d, y):
                     )
             h[p, q] = -s
     return h
+def cl_hessian(D, d, y):
+    N, M = y.shape
+    h = np.zeros([N,M],dtype=np.float32).flatten()
 
+    cl_h = cl.Buffer(ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=h)
+    cl_D = cl.Buffer(ctx, mf.COPY_HOST_PTR, hostbuf=D)
+    cl_d = cl.Buffer(ctx, mf.COPY_HOST_PTR, hostbuf=d)
+    cl_y = cl.Buffer(ctx, mf.COPY_HOST_PTR, hostbuf=y)
+
+    kernel_h.hessian(queue, (N, 1), None, cl_D, cl_d, cl_h, cl_y, np.int32(N))
+    cl.enqueue_copy(queue, h, cl_h)
+    return h.flatten().astype(np.float32)
 
 def y_update_constant(y, s, D, d, alpha=0.3):
     y = y + alpha * s
@@ -212,13 +242,13 @@ def main():
         # Calcul du gradient
 
         #g = gradient(D, d, y)
-        cl_g = cl_gradient(D, d, y)
+        g = cl_gradient(D, d, y)
 
         # et de la Hessienne
-        H = hessian(D, d, y)
-
+        #H = hessian(D, d, y)
+        H = cl_hessian(D,d,y)
         # calcul du pas
-        s = -cl_g.flatten(order="F") / np.abs(H.flatten(order="F"))
+        s = -g.flatten(order="F") / np.abs(H.flatten(order="F"))
         s = np.reshape(s, (-1, n), order='F')
         # mise à jour des distance dans l'espace de représentation
         d = cdist(y, y).astype(np.float32)
