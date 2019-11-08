@@ -9,10 +9,8 @@ from pyopencl.reduction import ReductionKernel
 import pyopencl.array as cl_array
 import pyopencl as cl
 
-
 deviceID = 0
 platformID = 1
-
 
 dev = cl.get_platforms()[platformID].get_devices()[deviceID]
 
@@ -20,13 +18,12 @@ ctx = cl.Context([dev])
 queue = cl.CommandQueue(ctx)
 mf = cl.mem_flags
 
-
-kernel_g = cl.Program(ctx,"""__kernel void gradient(__global float  *D, __global float *d, __global float2* g, __global float2* y , int n)
+kernel_g = cl.Program(ctx, """__kernel void gradient(__global float  *D, __global float *d, __global float2* g, __global float2* y , int n)
     {
         unsigned int p = get_local_id(0); //get_global_id(0)?
         float2 sum=0;
-    
-        
+
+
         for(unsigned int j=0;j<n;j++)
         {
             if(p!=j)
@@ -37,11 +34,11 @@ kernel_g = cl.Program(ctx,"""__kernel void gradient(__global float  *D, __global
             }
         }
         g[p]=-sum;
-       
-           
+
+
     }""").build()
 
-kernel_h=cl.Program(ctx,"""
+kernel_h = cl.Program(ctx, """
     __kernel void hessian(__global float * D,__global float * d,__global float2 * h,__global float2 * y,const int n)
     {
         uint p=get_local_id(0);
@@ -55,11 +52,7 @@ kernel_h=cl.Program(ctx,"""
     }
 
     """
-    ).build()
-
-
-
-
+                      ).build()
 
 
 # @profile
@@ -102,8 +95,7 @@ def cl_gradient(D, d, y):
     cl.enqueue_copy(queue, g, cl_g)
     return g.flatten().astype(np.float64)
 
-
-    #Cette solution ne fonctionne pas le compilateur me dit que je redefinis n je comprend pas
+    # Cette solution ne fonctionne pas le compilateur me dit que je redefinis n je comprend pas
 
     # matrice = eltWise(ctx, '__global float *D,__global float *d,int *n,__global float2 *g',
     #                   '''
@@ -122,7 +114,6 @@ def cl_gradient(D, d, y):
     #               ''', name ='matrice',preamble="", options=[])
     #
     # matrice(cl_D, cl_d,np.int32((N,1)),cl_g)
-
 
 
 def hessian(D, d, y):
@@ -147,9 +138,11 @@ def hessian(D, d, y):
                     )
             h[p, q] = -s
     return h
+
+
 def cl_hessian(D, d, y):
     N, M = y.shape
-    h = np.zeros([N,M],dtype=np.float32).flatten()
+    h = np.zeros([N, M], dtype=np.float32).flatten()
 
     cl_h = cl.Buffer(ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=h)
     cl_D = cl.Buffer(ctx, mf.COPY_HOST_PTR, hostbuf=D)
@@ -159,6 +152,7 @@ def cl_hessian(D, d, y):
     kernel_h.hessian(queue, (N, 1), None, cl_D, cl_d, cl_h, cl_y, np.int32(N))
     cl.enqueue_copy(queue, h, cl_h)
     return h.flatten().astype(np.float32)
+
 
 def y_update_constant(y, s, D, d, alpha=0.3):
     y = y + alpha * s
@@ -241,12 +235,12 @@ def main():
     for i in range(maxiter):
         # Calcul du gradient
 
-        #g = gradient(D, d, y)
+        # g = gradient(D, d, y)
         g = cl_gradient(D, d, y)
 
         # et de la Hessienne
-        #H = hessian(D, d, y)
-        H = cl_hessian(D,d,y)
+        # H = hessian(D, d, y)
+        H = cl_hessian(D, d, y)
         # calcul du pas
         s = -g.flatten(order="F") / np.abs(H.flatten(order="F"))
         s = np.reshape(s, (-1, n), order='F')
